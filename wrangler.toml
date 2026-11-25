@@ -4,9 +4,12 @@ compatibility_date = "2024-06-20"
 
 [vars]
 WEBDAV_PUBLIC_READ = "0"
-# SITES_HOST is set as a Cloudflare Pages environment variable in the dashboard
-# (production/preview), NOT hard-coded here, so a deploy cannot override it.
+# Direct-upload deploys (`wrangler pages deploy`) reset project env from this
+# file, so SITES_HOST must live here to survive a deploy. Git-integration users:
+# set it as a Pages dashboard env var instead and delete this line
+# (dashboard-set value then wins, and a deploy cannot override it).
 # Empty/missing SITES_HOST = static sites stay off.
+SITES_HOST = "sites.anywear.life"
 
 [[r2_buckets]]
 binding = "BUCKET"
