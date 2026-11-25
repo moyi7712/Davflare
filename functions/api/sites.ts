@@ -87,6 +87,8 @@ interface SitesApiEnv {
 }
 
 const SITE_STATS_MAX_OBJECTS = 5000;
+/** 每站 refMap 路径映射条数上限（防止配置对象无限膨胀） */
+const SITE_REF_MAP_MAX = 500;
 const SITE_STATS_TTL_MS = 10 * 60 * 1000;
 const SITE_DELETE_MAX_OBJECTS = 5000;
 
@@ -1008,6 +1010,9 @@ export const onRequestGet: PagesFunction<SitesApiEnv> = async (context) => {
     sites.push({
       slug,
       spa: Boolean(config.spa),
+      refMode: Boolean(config.refMode),
+      sourceFolder: config.refMode ? config.sourceFolder || null : null,
+      refMapCount: config.refMode && config.refMap ? Object.keys(config.refMap).length : 0,
       passwordProtected: Boolean(config.passwordHash),
       hostname: config.hostname || null,
       stats: stats || null,
@@ -1034,6 +1039,9 @@ export const onRequestPost: PagesFunction<SitesApiEnv> = async (context) => {
   let body: {
     slug?: string;
     spa?: boolean;
+    refMode?: boolean;
+    sourceFolder?: string | null;
+    refMap?: Record<string, string> | null;
     source?: string;
     password?: string | null;
     hostname?: string | null;
@@ -1159,6 +1167,80 @@ export const onRequestPost: PagesFunction<SitesApiEnv> = async (context) => {
     config.spa = body.spa;
   }
 
+  // 引用模式（refMode）：站点路径 miss 时回源读取，不复制副本。
+  // 映射两种形态：refMap 路径映射表（文件精确/目录前缀，最长 key 优先，子路径保留），
+  // sourceFolder 整站前缀映射（兜底）。
+  if (Object.prototype.hasOwnProperty.call(body, "refMap")) {
+    if (body.refMap === null) {
+      delete config.refMap;
+    } else if (body.refMap && typeof body.refMap === "object" && !Array.isArray(body.refMap)) {
+      const entries = Object.entries(body.refMap);
+      if (entries.length > SITE_REF_MAP_MAX) {
+        return textResponse(`too many refMap entries: ${entries.length} > ${SITE_REF_MAP_MAX}`, 400);
+      }
+      const clean: Record<string, string> = {};
+      for (const [rel, target] of entries) {
+        if (typeof rel !== "string" || typeof target !== "string") {
+          return textResponse("refMap values must be strings", 400);
+        }
+        // key = 站点内相对路径（文件或目录）；value = 网盘源路径。同一套安全校验：
+        // 非空、无 .. 段、无内部目录段、无控制字符、不以 / 开头结尾。
+        const safeRel = rel.replace(/^\/+/, "").replace(/\/+$/, "");
+        if (
+          !safeRel ||
+          safeRel.split("/").some((p) => !p || p === "." || p === ".." || p.includes("_$flaredrive$")) ||
+          safeRel.includes("\\") ||
+          /[\u0000-\u001f]/.test(safeRel)
+        ) {
+          return textResponse(`bad refMap key: ${rel.slice(0, 80)}`, 400);
+        }
+        const safeTarget = target.replace(/^\/+/, "").replace(/\/+$/, "");
+        if (
+          !safeTarget ||
+          safeTarget.split("/").some((p) => !p || p === "." || p === ".." || p.includes("_$flaredrive$")) ||
+          safeTarget.includes("\\") ||
+          /[\u0000-\u001f]/.test(safeTarget)
+        ) {
+          return textResponse(`bad refMap target: ${target.slice(0, 80)}`, 400);
+        }
+        if (safeTarget.startsWith(SITES_PREFIX)) {
+          return textResponse("refMap target cannot be inside the sites namespace", 400);
+        }
+        clean[safeRel] = safeTarget;
+      }
+      if (Object.keys(clean).length === 0) {
+        delete config.refMap;
+      } else {
+        config.refMap = clean;
+      }
+    } else {
+      return textResponse("Bad refMap", 400);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "sourceFolder")) {
+    if (body.sourceFolder === null || body.sourceFolder === "") {
+      delete config.sourceFolder;
+    } else if (typeof body.sourceFolder === "string") {
+      const folder = normalizeDirKey(body.sourceFolder);
+      if (folder instanceof Response) return folder;
+      if (folder.startsWith(SITES_PREFIX) || folder.includes("_$flaredrive$")) {
+        return textResponse("sourceFolder cannot be inside the sites namespace", 400);
+      }
+      config.sourceFolder = folder;
+    } else {
+      return textResponse("Bad sourceFolder", 400);
+    }
+  }
+  if (typeof body.refMode === "boolean") {
+    if (body.refMode && !config.sourceFolder && !config.refMap) {
+      return textResponse("refMode requires sourceFolder or refMap", 400);
+    }
+    config.refMode = body.refMode;
+  }
+  if (!config.refMode) {
+    delete config.refMode; // false 不落盘，配置保持干净
+  }
+
   // password key present: set (non-empty) or clear (null/""); omit leaves hash unchanged.
   // Never store plaintext — SHA-256 hex only; never echo the secret back.
   if (Object.prototype.hasOwnProperty.call(body, "password")) {
@@ -1211,6 +1293,9 @@ export const onRequestPost: PagesFunction<SitesApiEnv> = async (context) => {
   return jsonResponse({
     slug,
     spa: Boolean(config.spa),
+    refMode: Boolean(config.refMode),
+    sourceFolder: config.refMode ? config.sourceFolder || null : null,
+    refMapCount: config.refMode && config.refMap ? Object.keys(config.refMap).length : 0,
     passwordProtected: Boolean(config.passwordHash),
     hostname: config.hostname || null,
   });

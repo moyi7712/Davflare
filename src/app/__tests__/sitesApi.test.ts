@@ -114,9 +114,77 @@ describe("sites API publish", () => {
     expect(await response.json()).toEqual({
       slug: "blog",
       spa: true,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: false,
       hostname: null,
     });
+  });
+
+  test("refMode config: enable requires sourceFolder or refMap; null clears", async () => {
+    const bucket = new InMemoryBucket();
+    bucket.seed([{ key: "sites/blog/index.html", body: "<h1/>" }]);
+
+    // refMode=true without sourceFolder/refMap → 400
+    const noMapping = await onRequestPost(
+      makeContext(post({ slug: "blog", refMode: true }), makeEnv(bucket))
+    );
+    expect(noMapping.status).toBe(400);
+
+    // sourceFolder inside the sites namespace → 400
+    const sitesFolder = await onRequestPost(
+      makeContext(post({ slug: "blog", sourceFolder: "sites/other" }), makeEnv(bucket))
+    );
+    expect(sitesFolder.status).toBe(400);
+
+    // refMap with traversal key → 400
+    const badMap = await onRequestPost(
+      makeContext(post({ slug: "blog", refMap: { "../etc": "x" } }), makeEnv(bucket))
+    );
+    expect(badMap.status).toBe(400);
+
+    // refMap target inside the sites namespace → 400
+    const badTarget = await onRequestPost(
+      makeContext(post({ slug: "blog", refMap: { "a.png": "sites/other/a.png" } }), makeEnv(bucket))
+    );
+    expect(badTarget.status).toBe(400);
+
+    // valid enable via refMap alone
+    const enable = await onRequestPost(
+      makeContext(
+        post({ slug: "blog", refMap: { "logo.png": "brand/logo-v2.png", assets: "photos" }, refMode: true }),
+        makeEnv(bucket)
+      )
+    );
+    expect(enable.status).toBe(200);
+    expect(await enable.json()).toEqual({
+      slug: "blog",
+      spa: false,
+      refMode: true,
+      sourceFolder: null,
+      refMapCount: 2,
+      passwordProtected: false,
+      hostname: null,
+    });
+    const stored = (await (
+      await bucket.asBucket().get("_$flaredrive$/sites/blog.json")
+    )!.json()) as { refMode?: boolean; refMap?: Record<string, string> };
+    expect(stored.refMode).toBe(true);
+    expect(stored.refMap).toEqual({ "logo.png": "brand/logo-v2.png", assets: "photos" });
+
+    // refMap: null clears the map; refMode is an explicit switch and stays on
+    // (harmless: no mappings → misses fall through to SPA/404)
+    const clearMap = await onRequestPost(
+      makeContext(post({ slug: "blog", refMap: null }), makeEnv(bucket))
+    );
+    const clearedBody = (await clearMap.json()) as { refMode: boolean; refMapCount: number };
+    expect(clearedBody.refMapCount).toBe(0);
+    const cleared = (await (
+      await bucket.asBucket().get("_$flaredrive$/sites/blog.json")
+    )!.json()) as { refMode?: boolean; refMap?: Record<string, string> };
+    expect(cleared.refMap).toBeUndefined();
+    expect(cleared.refMode).toBe(true);
   });
 
   test("set / clear access password stores hash only", async () => {
@@ -130,6 +198,9 @@ describe("sites API publish", () => {
     expect(await setResponse.json()).toEqual({
       slug: "blog",
       spa: false,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: true,
       hostname: null,
     });
@@ -148,6 +219,9 @@ describe("sites API publish", () => {
     expect(await spaResponse.json()).toEqual({
       slug: "blog",
       spa: true,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: true,
       hostname: null,
     });
@@ -163,6 +237,9 @@ describe("sites API publish", () => {
     expect(await clearResponse.json()).toEqual({
       slug: "blog",
       spa: true,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: false,
       hostname: null,
     });
@@ -195,6 +272,9 @@ describe("sites API publish", () => {
     expect(await setResponse.json()).toEqual({
       slug: "blog",
       spa: false,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: false,
       hostname: "blog.example.com",
     });
@@ -227,6 +307,9 @@ describe("sites API publish", () => {
     expect(await spaResponse.json()).toEqual({
       slug: "blog",
       spa: true,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: false,
       hostname: "blog.example.com",
     });
@@ -237,6 +320,9 @@ describe("sites API publish", () => {
     expect(await clearResponse.json()).toEqual({
       slug: "blog",
       spa: true,
+      refMode: false,
+      sourceFolder: null,
+      refMapCount: 0,
       passwordProtected: false,
       hostname: null,
     });

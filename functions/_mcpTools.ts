@@ -284,7 +284,7 @@ export const MCP_TOOLS = [
   {
     name: "sites_list",
     description:
-      "List static sites hosted under sites/ with their SPA flag and cached stats (file count, total size).",
+      "List static sites hosted under sites/ with their SPA flag, refMode status and cached stats (file count, total size).",
     inputSchema: {
       type: "object",
       properties: {
@@ -299,14 +299,29 @@ export const MCP_TOOLS = [
   {
     name: "sites_config",
     description:
-      "Update a site config. spa=true makes unknown paths fall back to the site index.html (SPA history routing). The site must already exist.",
+      "Update a site config. spa=true makes unknown paths fall back to the site index.html (SPA history routing). refMode=true serves drive files when a site path has no local copy (reference mode: no duplication, source edits go live immediately; referenced html/svg/js download instead of executing). Mapping is refMap (site path → drive path; exact hit = file map, prefix hit = dir map keeping subpaths, longest key wins) with sourceFolder as a whole-site fallback prefix. Enabling refMode requires refMap or sourceFolder. The site must already exist.",
     inputSchema: {
       type: "object",
       properties: {
         slug: { type: "string", description: "Site slug" },
         spa: { type: "boolean", description: "Enable SPA index.html fallback" },
+        refMode: {
+          type: "boolean",
+          description: "Enable reference mode (requires refMap or sourceFolder to be set)",
+        },
+        sourceFolder: {
+          type: ["string", "null"],
+          description:
+            "Fallback drive folder prefix refMode reads from, e.g. photos/trip; null clears it",
+        },
+        refMap: {
+          type: ["object", "null"],
+          description:
+            'Path map object, e.g. {"logo.png":"brand/logo-v2.png","assets/imgs":"photos/trip"}. Exact site path = file map; site path under the key = dir map with subpaths preserved; longest key wins. null clears the map',
+          additionalProperties: { type: "string" },
+        },
       },
-      required: ["slug", "spa"],
+      required: ["slug"],
     },
   },
   {

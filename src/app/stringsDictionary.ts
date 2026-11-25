@@ -74,6 +74,11 @@ const entries: Record<string, DictionaryEntry> = {
     en: "Select a folder in the file manager → Publish as site, upload into sites/<name>/, or deploy a zip.",
   },
   siteSpaLabel: { zh: "SPA 回退", en: "SPA fallback" },
+  siteRefBadge: { zh: "引用", en: "Ref" },
+  siteRefTooltip: {
+    zh: "引用模式：站点路径无副本时从网盘回源（API / MCP 配置）",
+    en: "Reference mode: misses stream from the drive (API / MCP)",
+  },
   siteStaticBadge: { zh: "静态", en: "Static" },
   openSite: { zh: "打开站点", en: "Open site" },
   manageFiles: { zh: "管理文件", en: "Manage files" },

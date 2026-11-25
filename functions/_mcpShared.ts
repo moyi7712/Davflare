@@ -112,7 +112,13 @@ export type ToolCallApis = {
     all?: boolean;
   }) => Promise<Response>;
   sitesList: (query: { withStats?: boolean }) => Promise<Response>;
-  sitesConfig: (query: { slug: string; spa: boolean }) => Promise<Response>;
+  sitesConfig: (query: {
+    slug: string;
+    spa?: boolean;
+    refMode?: boolean;
+    sourceFolder?: string | null;
+    refMap?: Record<string, string> | null;
+  }) => Promise<Response>;
   sitesDelete: (query: { slug: string; purge?: boolean }) => Promise<Response>;
   /** Product Sites switch; publish_site is 404 when false. */
   sitesEnabled: () => Promise<boolean>;

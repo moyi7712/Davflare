@@ -79,6 +79,15 @@ export interface SiteStats {
 export interface SiteInfo {
   slug: string;
   spa: boolean;
+  /**
+   * 引用模式只读状态：站点路径 miss 时按映射回源网盘原始文件。
+   * 仅作展示——refMode/sourceFolder/refMap 只能通过 API 或 MCP 配置，界面不提供开关。
+   */
+  refMode?: boolean;
+  /** 整站兜底源文件夹；null 表示未设置 */
+  sourceFolder?: string | null;
+  /** refMap 路径映射条数 */
+  refMapCount?: number;
   /** True when an access password is set (hash never exposed). */
   passwordProtected?: boolean;
   /** Optional custom hostname served at domain root (e.g. blog.example.com). */

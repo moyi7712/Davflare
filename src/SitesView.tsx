@@ -233,6 +233,21 @@ function SiteCard({
               color={site.spa ? "primary" : "default"}
               sx={{ height: 20, fontSize: "0.7rem" }}
             />
+            {site.refMode && (
+              <Tooltip title={strings.siteRefTooltip}>
+                <Chip
+                  label={strings.siteRefBadge}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    bgcolor: "#f38020", // Davflare 品牌橙：与 SPA 蓝 / 静态灰形成底色区分
+                    color: "#fff",
+                  }}
+                />
+              </Tooltip>
+            )}
             {site.passwordProtected && (
               <Chip
                 icon={<LockIcon sx={{ fontSize: "0.85rem !important" }} />}

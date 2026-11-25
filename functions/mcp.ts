@@ -299,10 +299,10 @@ function makeApis(context: McpContext): ToolCallApis {
       const request = cloneApiRequest(context.request, "GET", url);
       return sitesOnGet(withRequest(context, request));
     },
-    async sitesConfig({ slug, spa }) {
+    async sitesConfig(patch) {
       const url = new URL("/api/sites", origin);
       const request = cloneApiRequest(context.request, "POST", url, {
-        body: JSON.stringify({ slug, spa }),
+        body: JSON.stringify(patch),
         headers: { "Content-Type": "application/json" },
       });
       return sitesOnPost(withRequest(context, request));

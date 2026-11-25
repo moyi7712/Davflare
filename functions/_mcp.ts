@@ -252,10 +252,34 @@ async function callTool(
     }
     case "sites_config": {
       const slug = asString(args.slug);
-      const spa = asOptionalBoolean(args.spa);
       if (!slug) return toolError("slug is required");
-      if (spa === undefined) return toolError("spa is required");
-      return wrapApiResponse(await apis.sitesConfig({ slug, spa }));
+      const patch: {
+        slug: string;
+        spa?: boolean;
+        refMode?: boolean;
+        sourceFolder?: string | null;
+        refMap?: Record<string, string> | null;
+      } = { slug };
+      const spa = asOptionalBoolean(args.spa);
+      const refMode = asOptionalBoolean(args.refMode);
+      if (spa !== undefined) patch.spa = spa;
+      if (refMode !== undefined) patch.refMode = refMode;
+      if (typeof args.sourceFolder === "string") patch.sourceFolder = args.sourceFolder;
+      else if (args.sourceFolder === null) patch.sourceFolder = null;
+      if (args.refMap !== undefined) {
+        if (args.refMap === null) patch.refMap = null;
+        else if (
+          args.refMap &&
+          typeof args.refMap === "object" &&
+          !Array.isArray(args.refMap) &&
+          Object.values(args.refMap).every((v) => typeof v === "string")
+        ) {
+          patch.refMap = args.refMap as Record<string, string>;
+        } else {
+          return toolError("refMap must be an object of string → string, or null");
+        }
+      }
+      return wrapApiResponse(await apis.sitesConfig(patch));
     }
     case "sites_delete": {
       const slug = asString(args.slug);

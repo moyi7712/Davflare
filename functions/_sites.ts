@@ -36,6 +36,21 @@ export interface SiteConfig {
   hostname?: string;
   /** 最近一次「从网盘文件夹发布」（普通静态站 / 公开目录）的源文件夹；发布前占用检查用（#151） */
   source?: string;
+  /**
+   * 引用模式：站点路径 miss 时不直接 404，按 sourceFolder 把相对路径映射回网盘原始文件，
+   * 服务端读取并流式返回（不复制副本，源文件更新即时生效）。引用进来的 active 类型
+   * （html/svg/js…）一律强制下载，与生成型站点同级的安全边界。
+   */
+  refMode?: boolean;
+  /** refMode 的源文件夹 key（网盘侧）；兜底前缀映射，可与 refMap 并存（refMap 优先） */
+  sourceFolder?: string;
+  /**
+   * 路径映射表：站点相对路径 → 网盘源路径。两种匹配形态：
+   * - 站点路径精确等于 key → 文件映射，返回 value；
+   * - 站点路径落在 key 目录下（含任意深度子路径）→ 目录映射，剩余子路径拼到 value 后；
+   * 多条命中取最长 key。用于"站点里每个文件/文件夹各自对应网盘某处"的引用场景。
+   */
+  refMap?: Record<string, string>;
   stats?: SiteStats;
   /**
    * 服务规则最近一次变化的时间（ISO）：生成型站点（公开目录 / 相册 / 文档站）改回普通站、
@@ -92,6 +107,52 @@ export function siteSpaKey(slug: string): string {
 
 export function siteNotFoundKey(slug: string): string {
   return `${SITES_PREFIX}${slug}/404.html`;
+}
+
+/** refMode 映射里站点相对路径 / 源 key 的公共安全校验：非空、无穿越、无内部目录段。 */
+function isSafeRefPath(path: string): boolean {
+  if (!path || path.startsWith("/") || path.endsWith("/") || path.includes("\\")) return false;
+  if (/[\u0000-\u001f]/.test(path)) return false;
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length === 0) return false;
+  return !parts.some((part) => part === "." || part === ".." || part.includes("_$flaredrive$"));
+}
+
+/**
+ * refMode：站点相对路径 → 源 key。
+ * 1) refMap 映射表：精确命中（rel === key）= 文件映射；前缀命中（rel 以 key/ 开头）=
+ *    目录映射，剩余子路径拼到 value 后；多条命中取最长 key（key 已在写入时校验，读取侧复核）；
+ * 2) 无 refMap 命中时按 sourceFolder 前缀映射兜底（rel 已过 parseSitesPath 校验，这里再做一层）。
+ * 返回 null = 无映射，调用方继续走 SPA / 404 兜底。
+ */
+export function refSourceKey(config: SiteConfig, rel: string): string | null {
+  if (!config.refMode) return null;
+  if (!rel || rel.startsWith("/") || rel.endsWith("/") || rel.includes("\\")) return null;
+  if (/[\u0000-\u001f]/.test(rel)) return null;
+  const parts = rel.split("/").filter(Boolean);
+  if (parts.length === 0) return null;
+  if (parts.some((part) => part === "." || part === ".." || part.includes("_$flaredrive$"))) {
+    return null;
+  }
+  if (config.refMap) {
+    let bestKey: string | null = null;
+    for (const key of Object.keys(config.refMap)) {
+      if (key === rel) {
+        bestKey = key; // 精确命中即最长匹配
+        break;
+      }
+      if (rel.startsWith(`${key}/`) && key.length > (bestKey?.length ?? 0)) {
+        bestKey = key;
+      }
+    }
+    if (bestKey !== null) {
+      const target = config.refMap[bestKey];
+      if (!isSafeRefPath(target) || target.startsWith(SITES_PREFIX)) return null;
+      return rel === bestKey ? target : `${target}/${rel.slice(bestKey.length + 1)}`;
+    }
+  }
+  if (!config.sourceFolder) return null;
+  return `${config.sourceFolder}/${rel}`;
 }
 
 /** 配置里的 policyAt 解析成 Date；缺失或损坏为 null */
@@ -448,7 +509,7 @@ export function siteVariantEtag(
   return `${weak ? "W/" : ""}"${inner}${suffix}"`;
 }
 
-function notModifiedSince(ifModifiedSince: string | null | undefined, lastModified: Date | null): boolean {
+export function notModifiedSince(ifModifiedSince: string | null | undefined, lastModified: Date | null): boolean {
   if (!ifModifiedSince || !lastModified) return false;
   const since = Date.parse(ifModifiedSince);
   if (!Number.isFinite(since)) return false;
@@ -468,11 +529,14 @@ export function sitesResponse(
     policyUpdatedAt?: Date | null;
     /** 站点配置里的 policyAt（改回普通站的时间，#173）：同样并入 Last-Modified */
     configPolicyAt?: Date | null;
+    /** refMode 引用文件：宣告支持 Range，浏览器媒体播放才会发分段请求 */
+    acceptRanges?: boolean;
   }
 ) {
   const headers = new Headers();
   headers.set("Content-Type", mimeForKey(key));
   headers.set("X-Content-Type-Options", "nosniff");
+  if (options?.acceptRanges) headers.set("Accept-Ranges", "bytes");
   if (options?.download) {
     // 生成型站点里的 html/svg/xml/js（#146）：强制下载；万一客户端无视 Content-Disposition，
     // CSP sandbox 也让它在不透明源里打开，脚本碰不到共享站点域名

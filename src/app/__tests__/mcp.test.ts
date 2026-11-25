@@ -483,11 +483,27 @@ describe("mcp protocol", () => {
     expect(sitesDelete).toHaveBeenCalledWith({ slug: "demo", purge: true });
   });
 
-  test("sites_config requires slug and spa", async () => {
+  test("sites_config requires slug; refMode/sourceFolder pass through", async () => {
     const sitesConfig = vi.fn(async () => httpJsonResponse({ slug: "demo", spa: true }));
-    const missing = await callTool("sites_config", { slug: "demo" }, { sitesConfig });
+    const missing = await callTool("sites_config", {}, { sitesConfig });
     expect(toolPayload(missing).isError).toBe(true);
     expect(sitesConfig).not.toHaveBeenCalled();
+
+    // partial update: refMode + sourceFolder are optional fields on the same patch
+    await callTool(
+      "sites_config",
+      { slug: "demo", refMode: true, sourceFolder: "photos/trip" },
+      { sitesConfig }
+    );
+    expect(sitesConfig).toHaveBeenLastCalledWith({
+      slug: "demo",
+      refMode: true,
+      sourceFolder: "photos/trip",
+    });
+
+    // sourceFolder: null disables refMode
+    await callTool("sites_config", { slug: "demo", sourceFolder: null }, { sitesConfig });
+    expect(sitesConfig).toHaveBeenLastCalledWith({ slug: "demo", sourceFolder: null });
   });
 
   test("pull walks layers and documents merge order project > agent > global", async () => {

@@ -11,6 +11,7 @@ import {
   loadSiteConfig,
   loadSlugForHostname,
   parseSitesRootPath,
+  refSourceKey,
   siteConfigPolicyAt,
   siteNotFoundKey,
   sitePasswordAuthorized,
@@ -25,9 +26,12 @@ import {
 import {
   SITE_MANIFEST_NAMES,
   SiteServePolicy,
+  isActiveSiteFile,
   loadSiteServePolicy,
   siteFileForcesDownload,
 } from "./siteManifest";
+import { isCollectionObject } from "./api/_apikey";
+import { etagMatches, mimeForKey, notModifiedSince, siteVariantEtag } from "./_sites";
 
 interface MiddlewareEnv {
   BUCKET: R2Bucket;
@@ -52,6 +56,133 @@ async function serveImage(
     etag: object.httpEtag,
   });
   return new Response(head ? null : object.body, { status: 200, headers });
+}
+
+/**
+ * 解析单段 Range 头（bytes=start-end / start- / -suffix）。
+ * null = 无 Range；"invalid" = 语法错误（回 416）；多段 Range 一律按无 Range 处理（回全量 200）。
+ * offset-only（start-）转成超大 length：官方 R2 与 shim 都会把越界 length 截到对象末尾。
+ */
+function parseRangeHeader(raw: string | null): R2Range | "invalid" | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("bytes=")) return "invalid";
+  const spec = trimmed.slice(6);
+  if (spec.includes(",")) return null; // 多段：不支持，回全量
+  const match = /^(\d*)-(\d*)$/.exec(spec);
+  if (!match) return "invalid";
+  const [, startStr, endStr] = match;
+  if (startStr === "" && endStr === "") return "invalid";
+  if (startStr === "") {
+    const suffix = Number(endStr);
+    return Number.isSafeInteger(suffix) && suffix > 0 ? { suffix } : "invalid";
+  }
+  const start = Number(startStr);
+  if (!Number.isSafeInteger(start) || start < 0) return "invalid";
+  if (endStr === "") {
+    return { offset: start, length: Number.MAX_SAFE_INTEGER };
+  }
+  const end = Number(endStr);
+  if (!Number.isSafeInteger(end) || end < start) return "invalid";
+  return { offset: start, length: end - start + 1 };
+}
+
+function rangeNotSatisfiable(detail: string): Response {
+  return new Response(detail, {
+    status: 416,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+/**
+ * refMode 引用回源：把站点路径 miss 的请求映射到网盘源文件，流式返回（不写副本）。
+ * - 支持 Range（媒体拖动）：单段 Range 转 R2 range 读，命中回 206 + Content-Range；
+ * - 协商缓存：ETag / Last-Modified 透传源对象，命中回 304；
+ * - 安全：引用进来的 active 类型（html/svg/js…）一律强制下载 + CSP sandbox，
+ *   与生成型站点同规则——共享站点域名上不执行任何网盘侧内容。
+ * 返回 null = 源文件也不存在，调用方继续走 SPA / 404 兜底。
+ */
+async function serveRefObject(
+  context: EventContext<MiddlewareEnv, any, any>,
+  sourceKey: string,
+  rel: string,
+  method: string,
+  opts: { privateCache: boolean; configPolicyAt: Date | null }
+): Promise<Response | null> {
+  const range = parseRangeHeader(context.request.headers.get("Range"));
+  if (range === "invalid") return rangeNotSatisfiable("Bad Range");
+
+  const object = range
+    ? await context.env.BUCKET.get(sourceKey, { range })
+    : await context.env.BUCKET.get(sourceKey);
+  if (!object || isCollectionObject(object) || isSiteFolderMarker(sourceKey, object)) return null;
+
+  // 引用进来的 active 类型（html/svg/js…）一律按附件下载：variant 进 ETag（#170）
+  const download = isActiveSiteFile(rel.toLowerCase());
+  const etag = siteVariantEtag(object.httpEtag, { download, privateCache: opts.privateCache });
+  const lastModified = object.uploaded instanceof Date ? object.uploaded : null;
+
+  // Range 命中：206 + Content-Range（此时忽略 If-None-Match 等条件头）
+  if (range) {
+    const total = object.size;
+    const start = "suffix" in range ? Math.max(0, total - range.suffix) : Math.max(0, range.offset ?? 0);
+    if (start >= total) return rangeNotSatisfiable("Range start beyond end of object");
+    const requested = "suffix" in range ? total : (range.length ?? total - start);
+    const end = Math.min(start + requested, total) - 1;
+    const length = end - start + 1;
+    if (length <= 0) return rangeNotSatisfiable("Empty range");
+    const headers = new Headers({
+      "Content-Type": mimeForKey(sourceKey),
+      "Content-Length": String(length),
+      "Content-Range": `bytes ${start}-${end}/${total}`,
+      "Accept-Ranges": "bytes",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": opts.privateCache ? "private, no-cache" : "public, no-cache",
+    });
+    if (opts.privateCache) headers.set("Vary", "Authorization");
+    if (etag) headers.set("ETag", etag);
+    if (lastModified) headers.set("Last-Modified", lastModified.toUTCString());
+    if (download) {
+      headers.set("Content-Disposition", `attachment; filename="${rel.split("/").pop() || "file"}"`);
+      headers.set("Content-Security-Policy", "sandbox");
+    }
+    return new Response(method === "HEAD" ? null : object.body, { status: 206, headers });
+  }
+
+  // 无 Range：条件请求先判 304（只对全量响应有意义）
+  const notModified = context.request.headers.get("If-None-Match")
+    ? etagMatches(context.request.headers.get("If-None-Match"), etag)
+    : notModifiedSince(context.request.headers.get("If-Modified-Since"), lastModified);
+  if (notModified) {
+    try {
+      void object.body?.cancel().catch(() => undefined);
+    } catch {
+      // ignore
+    }
+    const headers = new Headers({ "Cache-Control": opts.privateCache ? "private, no-cache" : "public, no-cache" });
+    if (opts.privateCache) headers.set("Vary", "Authorization");
+    if (etag) headers.set("ETag", etag);
+    if (lastModified) headers.set("Last-Modified", lastModified.toUTCString());
+    return new Response(null, { status: 304, headers });
+  }
+
+  return sitesResponse(
+    { body: object.body, httpEtag: object.httpEtag, uploaded: object.uploaded },
+    sourceKey,
+    method === "HEAD",
+    {
+      privateCache: opts.privateCache,
+      download,
+      ifNoneMatch: null, // 上面已判过 304
+      ifModifiedSince: null,
+      configPolicyAt: opts.configPolicyAt,
+      acceptRanges: true,
+    }
+  );
 }
 
 async function serveSlugSite(
@@ -104,6 +235,19 @@ async function serveSlugSite(
     if (indexHead) return sitesSlashRedirect(context.request.url, { privateCache });
   }
   if (!object) {
+    // refMode 引用模式：站点路径 miss 时按配置映射回网盘源文件流式返回（不写副本）。
+    // 源也没有时返回 null，继续走下面的 SPA / 404 兜底；映射函数自带穿越校验。
+    if (config?.refMode) {
+      const rel = parsed.key.slice(sitePrefix.length);
+      const sourceKey = refSourceKey(config, rel);
+      if (sourceKey) {
+        const served = await serveRefObject(context, sourceKey, rel, method, {
+          privateCache,
+          configPolicyAt,
+        });
+        if (served) return served;
+      }
+    }
     if (config?.spa) {
       const spaObject = await context.env.BUCKET.get(siteSpaKey(parsed.slug));
       if (spaObject) {
