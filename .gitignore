@@ -38,3 +38,21 @@ dist-extension/
 # Local redesign verification outputs
 /redesign-artifacts/
 /.playwright-mcp/
+
+# nas self-host 构建产物
+nas/workerd/worker.js
+nas/workerd/src/assets.json
+nas/workerd/node_modules/
+nas/daemon/dist/
+nas/daemon/node_modules/
+nas/data/
+nas/config/
+nas/daemon-go/bin/
+nas/daemon-go/web/node_modules/
+nas/daemon-go/web/dist/
+
+# NAS 本地密钥（真实 R2 凭据，绝不入库）
+nas/.env
+
+# wrangler 本地 dev 状态
+functions/.wrangler/

@@ -1,0 +1,60 @@
+# Davflare NAS 部署（两容器）
+#   daemon  : Go 静态二进制（rclone serve s3 二次封装的 R2 API + 云端 R2 同步 + 管理平面）
+#             基底镜像 rclone/rclone（官方 alpine，自带 rclone），无 Node，~134MB
+#   davflare: 官方 cloudflare/workerd 镜像，capnp 配置注入 worker 与绑定
+#
+# 使用前：
+#   1. 仓库根 npm install && npm run build        # 前端静态资源（workerd 打包用）
+#   2. cd daemon-go && ./build.sh                 # Go 交叉编译 linux amd64/arm64（需 Go ≥ 1.22）
+#   3. cd workerd && npm install && npm run build # 生成 workerd/worker.js
+#   4. cp .env.example .env 并填写 token / 管理账号密码 / R2 凭据
+#   5. 修改 workerd/davflare.compose.capnp 里的 DAEMON_TOKEN / WEBDAV_PASSWORD（与 .env 一致）
+#   6. docker compose up -d --build
+#
+# 同步方式/计划（push|pull|bisync、cron、远端、桶）不进 env：在管理平面 :9001 页面设置
+name: davflare
+
+services:
+  daemon:
+    build:
+      context: ./daemon-go
+    container_name: davflare-daemon
+    restart: unless-stopped
+    environment:
+      DAEMON_TOKEN: ${DAEMON_TOKEN}
+      DAEMON_DATA_DIR: /data
+      DAEMON_BUCKET: ${DAEMON_BUCKET:-webdav}
+      # 云端同步目标（仅 env 配置，页面不可改）
+      DAEMON_REMOTE: ${DAEMON_REMOTE:-r2}
+      DAEMON_REMOTE_BUCKET: ${DAEMON_REMOTE_BUCKET:-webdav}
+      DAEMON_CONFIG_FILE: /config/daemon-config.json    # 管理平面保存的同步配置持久化
+      # 管理平面登录（独立于 Davflare 的 WebDAV 账号）
+      DAEMON_MGMT_USER: ${DAEMON_MGMT_USER:-admin}
+      DAEMON_MGMT_PASS: ${DAEMON_MGMT_PASS}
+      # Cloudflare R2 凭据（rclone env-var 远端配置，免 rclone.conf；也可挂文件并设 RCLONE_CONFIG）
+      RCLONE_CONFIG_R2_TYPE: ${RCLONE_CONFIG_R2_TYPE:-s3}
+      RCLONE_CONFIG_R2_PROVIDER: ${RCLONE_CONFIG_R2_PROVIDER:-Cloudflare}
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${RCLONE_CONFIG_R2_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY:-}
+      RCLONE_CONFIG_R2_ENDPOINT: ${RCLONE_CONFIG_R2_ENDPOINT:-}
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: ${RCLONE_CONFIG_R2_NO_CHECK_BUCKET:-true}
+    volumes:
+      - ./data:/data                 # 本地原始文件（bucket 以子目录形式存放）
+      - ./config:/config             # daemon 配置持久化（可选：rclone/rclone.conf）
+    ports:
+      - "9001:9001"                  # 管理平面（浏览器打开即状态页，账号密码登录）
+    expose:
+      - "9000"                       # R2 API，仅容器网络内供 workerd 访问
+
+  davflare:
+    image: cloudflare/workerd:latest
+    container_name: davflare-web
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/workerd"]
+    command: ["serve", "/app/davflare.compose.capnp", "config", "--socket-addr=http=*:8788"]
+    volumes:
+      - ./workerd:/app:ro            # worker.js + capnp + schema（构建产物）
+    ports:
+      - "8788:8788"                  # Davflare Web UI + WebDAV + MCP
+    depends_on:
+      - daemon

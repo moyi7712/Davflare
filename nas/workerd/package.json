@@ -1,0 +1,17 @@
+{
+  "name": "davflare-workerd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Davflare on workerd: bundle functions/ + R2 shim + static assets, serve via cloudflare/workerd image",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "workerd serve davflare.capnp"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260905.1",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.3",
+    "workerd": "^1.20261125.1"
+  }
+}
